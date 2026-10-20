@@ -1,0 +1,33 @@
+--- a/train_shell/train_script.py
++++ b/train_shell/train_script.py
+@@ -45,6 +45,10 @@
+         from forecast_backbones.m4.transformer_trainer import M4_build_training_args
+         training_args = M4_build_training_args(model_config, result_dir = RUN_PATH)
+         device = model_config["optimization"]["device"]
++    elif MODEL_NAME == "m4_loop":
++        from forecast_backbones.m4_loop.transformer_trainer import M4Loop_build_training_args
++        training_args = M4Loop_build_training_args(model_config, result_dir=RUN_PATH)
++        device = str(training_args.device)
+     elif MODEL_NAME == "m4_pinball":
+         from forecast_backbones.m4_pinball.transformer_trainer import M4Pinball_build_training_args
+         training_args = M4Pinball_build_training_args(model_config, result_dir=RUN_PATH)
+@@ -106,5 +110,8 @@
+     if args.model_config_path is not None:
+         MODEL_CONFIG_PATH = Path(args.model_config_path) # 优先读取输入配置
++    elif MODEL_NAME == "m4_loop":
++        from forecast_backbones.m4_loop.transformer_config import DEFAULT_CONFIG
++        MODEL_CONFIG_PATH = DEFAULT_CONFIG
+     elif MODEL_NAME == "m4_pinball":
+         from forecast_backbones.m4_pinball.config import DEFAULT_CONFIG
+         MODEL_CONFIG_PATH = DEFAULT_CONFIG
+@@ -184,6 +191,10 @@
+     import yaml
+     with open(MODEL_CONFIG_PATH, 'r', encoding='utf-8') as f:
+         model_config = yaml.safe_load(f)
++    if MODEL_NAME == "m4_loop":
++        from forecast_backbones.m4_loop.train import train
++        train(model_config, str(train_path), str(valid_path), RUN_PATH, test_source=str(test_path))
++        raise SystemExit(0)
+     if MODEL_NAME == "m4_pinball":
+         from forecast_backbones.m4_pinball.train import train
+         train(model_config, str(train_path), str(valid_path), RUN_PATH, test_source=str(test_path))

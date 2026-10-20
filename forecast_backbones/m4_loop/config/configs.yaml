@@ -1,21 +1,36 @@
-# Defaults are loaded directly from this file; override only the keys you need.
+# NextGen M4-Loop: e_layers distinct blocks, repeated loop_steps times.
 dataset:
-  conv_cols: [general_ghi, general_temp]
-  conv_predict_cols: [general_ghi_predict, general_temp_predict]
+  conv_cols:
+  - general_ghi
+  - general_temp
+  conv_predict_cols:
+  - general_ghi_predict
+  - general_temp_predict
   pv_col: observe_power
   tsfm_col: chronos
   target_col: observe_power_future
   capacity_col: cap_power_on
   timestamp_col: timestamp_win
   entity_col: station
-
+  ts_col: timestamp_win
+  entity_cols:
+  - timestamp_win
+  - station
+  feature_cols:
+  - general_ghi
+  - general_temp
+  - general_ghi_predict
+  - general_temp_predict
+  - observe_power
+  - chronos
+  - cap_power_on
+  label_cols:
+  - observe_power_future
 inference:
   input_len: 672
   pred_len: 192
   seq_len: 864
-
 model:
-  block_layers: 2
   loop_steps: 2
   d_model: 256
   n_heads: 4
@@ -29,9 +44,9 @@ model:
   embedding_dim: 256
   head_hidden_dim: 64
   revin: true
-  revin_eps: 0.00001
+  revin_eps: 1.0e-05
   loss_type: mae
-
+  e_layers: 2
 optimization:
   random_seed: 2025
   train_epochs: 100
@@ -43,3 +58,7 @@ optimization:
   num_workers: 0
   device: auto
   grad_clip: 1.0
+  fp16: false
+  gradient_accumulation_steps: 1
+  warmup_ratio: 0.01
+  logging_steps: 10

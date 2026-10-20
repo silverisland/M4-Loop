@@ -1,6 +1,6 @@
-"""Create tiny, artificial Parquet inputs to check installation and training.
+"""Create tiny, artificial Parquet inputs to check NextGen integration and training.
 
-These samples are not a real forecast benchmark. They match configs/smoke.yaml,
+These samples are not a real forecast benchmark. They match forecast_backbones/m4_loop/config/smoke.yaml,
 not the production default 672/192-point windows.
 """
 

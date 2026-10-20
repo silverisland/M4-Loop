@@ -2,8 +2,16 @@
 
 from __future__ import annotations
 
+import os
+import sys
+from pathlib import Path
+
 import pytest
 import torch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+if os.environ.get("NEXTGEN_ROOT"):
+    sys.path.append(str(Path(os.environ["NEXTGEN_ROOT"]).resolve()))
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -16,7 +24,7 @@ def single_torch_thread():
 
 @pytest.fixture
 def config():
-    from m4_loop.config import load_config
+    from forecast_backbones.m4_loop.transformer_config import load_config
 
     return load_config(
         {

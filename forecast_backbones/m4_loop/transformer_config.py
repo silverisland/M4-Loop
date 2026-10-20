@@ -1,19 +1,19 @@
-"""Validated configuration for the standalone M4-Loop forecaster."""
+"""M4-style configuration for a self-contained NextGen forecasting backbone."""
 
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Mapping
 from copy import deepcopy
-from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-DEFAULT_CONFIG_PATH = files("m4_loop").joinpath("resources/default.yaml")
+DEFAULT_CONFIG = Path(__file__).with_name("config") / "configs.yaml"
 _DEFAULT_CONFIG: dict[str, dict[str, Any]] = yaml.safe_load(
-    DEFAULT_CONFIG_PATH.read_text(encoding="utf-8")
+    DEFAULT_CONFIG.read_text(encoding="utf-8")
 )
 
 
@@ -78,7 +78,7 @@ def _validate(config: dict[str, Any]) -> None:
     if inference["seq_len"] != inference["input_len"] + inference["pred_len"]:
         raise ValueError("inference.seq_len must equal input_len + pred_len")
     for name in (
-        "block_layers",
+        "e_layers",
         "loop_steps",
         "d_model",
         "n_heads",
@@ -110,7 +110,14 @@ def _validate(config: dict[str, Any]) -> None:
     if not isinstance(model["revin"], bool):
         raise ValueError("model.revin must be a boolean")
     _number(model["revin_eps"], "model.revin_eps", minimum=0.0, inclusive=False)
-    for name in ("train_epochs", "batch_size", "eval_batch_size", "patience"):
+    for name in (
+        "train_epochs",
+        "batch_size",
+        "eval_batch_size",
+        "patience",
+        "gradient_accumulation_steps",
+        "logging_steps",
+    ):
         _integer(optimization[name], f"optimization.{name}")
     for name in ("random_seed", "num_workers"):
         _integer(optimization[name], f"optimization.{name}", minimum=0)
@@ -122,16 +129,66 @@ def _validate(config: dict[str, Any]) -> None:
     if optimization["random_seed"] >= 2**32:
         raise ValueError("optimization.random_seed must be less than 2**32")
     device = optimization["device"]
-    if not isinstance(device, str) or not device.strip():
-        raise ValueError("optimization.device must be a non-empty device string")
+    if (
+        not isinstance(device, str)
+        or re.fullmatch(r"auto|cpu|mps|cuda(?::[0-9]+)?", device) is None
+    ):
+        raise ValueError("optimization.device must be auto, cpu, mps, cuda, or cuda:N")
+    if not isinstance(optimization["fp16"], bool):
+        raise ValueError("optimization.fp16 must be a boolean")
+    _number(optimization["warmup_ratio"], "optimization.warmup_ratio", minimum=0.0)
+    if optimization["warmup_ratio"] > 1:
+        raise ValueError("optimization.warmup_ratio must be <= 1")
+
+
+def _normalize(config: dict[str, Any], override: Mapping[str, Any]) -> None:
+    """Derive the fields consumed by NextGen's common dataset loader."""
+    dataset = config["dataset"]
+    supplied = override.get("dataset", {})
+    features = [
+        *dataset["conv_cols"],
+        *dataset["conv_predict_cols"],
+        dataset["pv_col"],
+        dataset["tsfm_col"],
+        dataset["capacity_col"],
+    ]
+    expected = {
+        "ts_col": dataset["timestamp_col"],
+        "feature_cols": features,
+        "label_cols": [dataset["target_col"]],
+    }
+    for name, value in expected.items():
+        if name in supplied and dataset[name] != value:
+            raise ValueError(f"dataset.{name} is inconsistent with the model column names")
+        dataset[name] = value
+    if "entity_cols" in supplied:
+        entities = dataset["entity_cols"]
+        valid = (
+            isinstance(entities, list)
+            and all(isinstance(value, str) for value in entities)
+            and len(entities) == len(set(entities))
+            and dataset["entity_col"] in entities
+            and set(entities) <= {dataset["entity_col"], dataset["timestamp_col"]}
+        )
+        if not valid:
+            raise ValueError(
+                "dataset.entity_cols must contain entity_col and optionally timestamp_col"
+            )
+    else:
+        dataset["entity_cols"] = [dataset["timestamp_col"], dataset["entity_col"]]
+    model = config["model"]
+    if isinstance(model["activation"], str):
+        model["activation"] = model["activation"].lower()
+    if isinstance(model["revin"], int) and model["revin"] in (0, 1):
+        model["revin"] = bool(model["revin"])
 
 
 def load_config(source: str | Path | Mapping[str, Any] | None = None) -> dict[str, Any]:
-    """Deep-merge a YAML path or mapping with defaults and reject unsupported keys.
+    """Merge with local defaults and validate canonical and NextGen dataset fields.
 
-    The returned dictionary owns its lists and nested dictionaries. Legacy M4
-    settings such as ``e_layers``, ``norm`` and ``res_attention`` are rejected:
-    this model always uses Pre-LayerNorm and no residual attention scores.
+    ``model.e_layers`` is the number of independently parameterized blocks;
+    ``loop_steps`` repeats that block stack with shared weights. The encoder
+    always uses Pre-LayerNorm and never carries residual attention scores.
     """
     config = deepcopy(_DEFAULT_CONFIG)
     if source is None:
@@ -147,21 +204,27 @@ def load_config(source: str | Path | Mapping[str, Any] | None = None) -> dict[st
     if not isinstance(override, Mapping):
         raise ValueError("configuration document must be a mapping")
     _merge(config, override)
+    _normalize(config, override)
     _validate(config)
     return config
 
 
-def feature_columns(config: str | Path | Mapping[str, Any] | None = None) -> list[str]:
-    """Return model feature columns, including capacity but excluding labels/metadata.
+def feature_columns(
+    config: str | Path | Mapping[str, Any] | None = None,
+    supervised: bool = True,
+) -> list[str]:
+    """Return features, including capacity only for supervised use.
 
     Capacity is needed for supervised loss. Label-free model inference does not
     require a capacity value.
     """
     dataset = load_config(config)["dataset"]
-    return [
+    columns = [
         *dataset["conv_cols"],
         *dataset["conv_predict_cols"],
         dataset["pv_col"],
         dataset["tsfm_col"],
-        dataset["capacity_col"],
     ]
+    if supervised:
+        columns.append(dataset["capacity_col"])
+    return columns

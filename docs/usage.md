@@ -1,212 +1,94 @@
-# 使用说明
+# 在 NextGen 中配置 M4-Loop
 
-独立的光伏功率预测项目。`m4_loop` 自带模型、配置、数据读取、损失、训练、
-checkpoint 和预测入口；不导入原 M4，也不依赖 `NextGenPVForecast`、
-`forecast_backbones`、`pipelines`、`interfaces` 或其他模型目录。
-整个 `M4-Loop` 文件夹可以单独复制到其他机器。
+## 复制
 
-## 模型约定
+将本仓库的 `forecast_backbones/m4_loop/` 整个目录复制到工作环境的 `NextGen/forecast_backbones/m4_loop/`，保留这个小写目录名。无需复制整个仓库，也无需执行 `pip install -e .`。以下代码和命令均在 NextGen 根目录运行。
 
-软件版本为 `0.2.0`；本次只调整工程组织，模型计算和 checkpoint 的
-`format_version=1`、`architecture_version=1` 保持不变。
+默认配置是 `forecast_backbones/m4_loop/config/configs.yaml`；可以复制为实验配置后传给 `--config`。模块入口会加载默认值，再覆盖实验 YAML 中明确给出的字段。
 
-默认结构：
+## 数据列
 
-```text
-历史气象 2×672 + 未来气象 2×192 ─┐
-历史功率 672  + Chronos 192 ────┴─ [B,3,864]
-              ↓ 每个样本、每个通道的全窗 RevIN
-              ↓ patch_len=stride=96，Linear(96,256)
-              ↓ 变量×时间 patch 展平 + 可学习位置嵌入
-                       [B,27,256]
-              ↓ A → B → A → B（两个共享 block，循环两次）
-              ↓ 最终 LayerNorm
-              ↓ 按 [B,3,256,9] 展平
-              ↓ 6912 → 256 → 256 → 64 → 192
-              ↓ 功率 RevIN 还原
-                       [B,192]
-```
+每行是一条预测窗口。历史 672 点、未来 192 点为默认长度，所有数值输入必须有限、等长。
 
-具体处理方式：
+| 配置项 | 默认列名 | 每行内容 |
+| --- | --- | --- |
+| `conv_cols` | `general_ghi`, `general_temp` | 两路气象历史，各 input_len 点 |
+| `conv_predict_cols` | `general_ghi_predict`, `general_temp_predict` | 两路气象未来预报，各 pred_len 点 |
+| `pv_col` | `observe_power` | 历史功率，input_len 点 |
+| `tsfm_col` | `chronos` | 外部功率先验，pred_len 点 |
+| `target_col` | `observe_power_future` | 真实标签，pred_len 点，仅训练/验证需要 |
+| `capacity_col` | `cap_power_on` | 固定装机容量，正数，仅训练/验证需要 |
+| `timestamp_col` | `timestamp_win` | 窗口时间标识 |
+| `entity_col` | `station` | 电站标识 |
 
-- **真正共享权重：** `block_layers=2`，`loop_steps=2`。循环次数变化不会增加
-  block 参数。所有循环都参与反向传播，没有 `detach` 或截断梯度。
-- **标准 Pre-LN：** 每个 block 使用 `x + Attention(LN(x))`，
-  再使用 `x + FFN(LN(x))`；编码器末尾额外做一次 LayerNorm。不使用 BatchNorm。
-- **attention：** 三个通道的所有 patch 做双向联合注意力。每层重新计算
-  attention 分数，不跨层或跨轮次累加 softmax 前的分数。
-- **固定循环：** 训练和预测使用 checkpoint 保存的相同循环次数。
-  不使用动态退出、循环编号嵌入或输入重复注入。Dropout 只在训练时启用。
-- **RevIN：** 保留历史与未来已知输入一起计算统计量的方式；均值和标准差只存在于
-  当前 forward 的局部变量中，统计量不反传，不在不同样本批次之间缓存。
-  默认不使用可学习仿射参数。未来真实标签不参与归一化。
-- **输出：** 一次输出整段功率；`logits` 与 `predictions` 均为原功率单位。
-  `embeddings` 是预测头第一层线性映射的结果。默认不做负值截断或容量封顶。
-- **损失：** 固定容量归一化 MAE；可配置 MSE 或 Huber（归一化误差的阈值为 1）。
-  不调用原 M4 的外部南网损失，也不从标签反推容量。验证按相同损失选择最佳权重。
+容量与功率须使用一致单位。容量支持 batch 中的标量、`[B]` 或 `[B,1]`，不接受随时间变化的容量序列。标签中部分 NaN/Inf 会掩码；训练数据中整条标签均无效的行会被过滤并提示。没有有效标签的数据集会报错。
 
-因此，本项目与原 M4 的差异包括循环权重共享、归一化、attention 分数处理和损失。
-若要判断循环本身的作用，应使用本项目中的四层非共享配置作对照：
+`dataset.ts_col/entity_cols/feature_cols/label_cols` 是 NextGen 通用数据加载字段，默认 YAML 同时列出。若修改列名，完整配置中的对应列表也需同步修改；若实验 YAML 只覆盖 `timestamp_col` 等模型字段，模块加载器会自动生成通用字段。两组字段显式冲突会报错，避免读错特征。预测通过 `feature_columns(cfg, supervised=False)` 排除标签与容量。
 
-| 配置 | 执行顺序 | 独立 block | 执行次数 |
-| --- | --- | ---: | ---: |
-| 默认 | A → B → A → B | 2 | 4 |
-| `configs/untied_4.yaml` | A → B → C → D | 4 | 4 |
-| `configs/shared_1x4.yaml` | A → A → A → A | 1 | 4 |
+## 模型与训练设置
 
-三者都使用同一套 Pre-LN、预测头和损失。减少参数不等于同比减少计算量或训练激活显存。
-修改循环配置后应重新训练；原 M4 checkpoint 不能直接加载。
-
-## 安装
-
-采用 `src/` 布局，必须先安装项目，再运行 Python 导入或命令。
-在仓库根目录执行 `python` 不会自动使用未安装的源码。
-
-推荐 Python 3.12；最低 Python 3.10。在仓库根目录执行：
+- `seq_len` 必须等于 `input_len + pred_len`，Patch 必须完整覆盖窗口。
+- `e_layers` 为不同参数的层数，`loop_steps` 为共享循环次数。默认 2×2；消融配置提供 1×4 与 4×1。
+- `activation` 支持 ReLU/GELU，不区分大小写；`revin` 支持 true/false 或 1/0。
+- `batch_size` 和 `eval_batch_size` 是每设备 batch 大小；梯度累积由 `gradient_accumulation_steps` 控制。
+- `device: auto` 由 Trainer 选择可用设备；CPU 可显式设置 `cpu`。`fp16` 仅在 CUDA 使用。选择 GPU 时优先设置 `CUDA_VISIBLE_DEVICES` 并使用 `device: cuda`。
+- 每轮验证并保存，按 `eval_loss` 选优，`patience` 控制早停。损失为容量归一化误差，HF Trainer 按样本聚合验证 batch 损失，不是按全数据集有效时间点重新加权的指标。
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install -e '.[dev]'
+python -m forecast_backbones.m4_loop.train \
+  --config forecast_backbones/m4_loop/config/configs.yaml \
+  --train /data/train.parquet --valid /data/valid.parquet \
+  --test /data/test.parquet --out runs/m4_loop/exp1
 ```
 
-仅依赖 PyTorch、NumPy、Pandas、PyArrow 和 PyYAML，不需要 Transformers、
-Hugging Face 数据集服务或下载预训练权重。Chronos 预测是数据表中已有的输入列；
-本项目不运行 Chronos 模型。
+输出包括 HF checkpoint、训练/验证指标、`result_val.parquet`，以及可选 `result_test.parquet`；最终加载目录为 `model_result/`，其中包含 `model.safetensors`、`model_config.yaml`。
 
-## 数据契约
+## 使用原 train_shell 入口（可选）
 
-输入是预先切分好的 Parquet 文件，每行代表一个起报窗口：
+现有 NextGen `train_shell/train_script.py` 硬编码模型名称，单复制目录不会增加其训练分支。本仓库提供 `integration/nextgen_train_script.patch`，增加 m4_loop 的默认配置、训练参数与专用训练路由。它基于本次检查的 NextGen 文件生成；其他版本请按补丁内容合并。
 
-| 默认列名 | 每行内容 |
-| --- | --- |
-| `general_ghi`、`general_temp` | 各 672 个历史值 |
-| `general_ghi_predict`、`general_temp_predict` | 各 192 个未来天气预报值 |
-| `observe_power` | 672 个历史功率值 |
-| `chronos` | 192 个外部功率预测值 |
-| `cap_power_on` | 一个正且有限的固定容量，与功率同单位；监督训练必须提供 |
-| `observe_power_future` | 192 个真实未来功率值；训练、验证必须提供 |
-| `timestamp_win`、`station` | 可选元数据，预测结果原样保留 |
-
-`capacity_col` 默认沿用 M4 的列名 `cap_power_on`，**实际必须提供该窗口采用的固定
-归一化容量**。如果该列在你的数据中是时变开机容量，应改用固定装机容量列，例如
-`cap_mw`。不接受每个时刻一份容量，也不会用未来标签估计容量。
-
-所有模型输入都必须有限且长度准确；NaN/Inf 输入会报错。标签中的 NaN/Inf 会被掩码，
-损失只计算有效点；训练入口过滤整行标签均无效的样本并记录数量。
-原始长度不一致会报错，不会自动截断历史或未来序列。
-
-无标签预测不需要容量。模型只在显式传入 `labels` 时计算损失；
-即使 `batch_dict` 含有真实标签列，也不会把它当作输入或自动计算监督损失。
-
-训练和验证由调用方按时间或站点提前切分。存在重叠窗口时，应在切分边界按业务设置
-隔离区；入口不会随机划分数据，也不会替调用方证明切分不存在泄漏。
-未来天气与外部功率预测必须是在起报时刻可获得的版本。
-
-## 配置
-
-默认配置随包放在 `src/m4_loop/resources/default.yaml`。自定义 YAML 只需填写覆盖项：
-
-```yaml
-dataset:
-  tsfm_col: observe_power_chronos_pred
-  capacity_col: cap_mw
-optimization:
-  device: cuda
-  batch_size: 64
-```
-
-`input_len + pred_len` 必须等于 `seq_len`；patch 必须完整覆盖整个输入窗口。
-默认支持 `mae`、`mse`、`huber` 三种 `model.loss_type`。
-未知配置键会报错，旧 M4 的 `e_layers`、`pre_norm`、`res_attention` 等键不能
-直接沿用。可用 `block_layers` 和 `loop_steps` 明确控制结构。
-
-## 训练和预测
+在 NextGen 根目录检查并应用：
 
 ```bash
-m4-loop train \
-  --train /path/to/train.parquet \
-  --valid /path/to/valid.parquet \
-  --out runs/loop_2x2
+git apply --check /path/to/M4-Loop/integration/nextgen_train_script.patch
+git apply /path/to/M4-Loop/integration/nextgen_train_script.patch
+python train_shell/train_script.py \
+  --model_name m4_loop \
+  --model_config_path forecast_backbones/m4_loop/config/configs.yaml \
+  --dataset_path /data/split \
+  --run_path runs/m4_loop/exp1
 ```
 
-使用覆盖配置时添加 `--config /path/to/overrides.yaml`。
-使用 `--max-steps 2` 可以做短训练检查。训练前设置随机种子，使用 AdamW 和梯度裁剪；
-每轮验证，按验证损失保存最佳权重，`patience` 按验证次数计。
-训练入口使用单进程、单设备、FP32；`device` 支持 `auto`、`cpu`、`cuda`、`mps`。
+`/data/split` 下需要 `train.parquet`、`valid.parquet`、`test.parquet`。补丁让该入口调用模块的训练函数，以兼容当前公共训练工具的缺失依赖，不修改原 M4 的代码或行为。只使用模块训练入口时不必应用此补丁。
 
-```bash
-m4-loop predict \
-  --checkpoint runs/loop_2x2/best.pt \
-  --data /path/to/test.parquet \
-  --out runs/loop_2x2/predictions.parquet
-```
-
-checkpoint 同时保存完整配置与权重，预测以其中的配置构造模型，严格检查权重匹配。
-预测输出列 `observe_power_predict` 为整段功率序列；标签和站点、时间元数据可随结果保留。
-预测默认自动选择当前机器可用设备；可添加 `--device cpu` 显式指定。
-训练输出目录必须为空，以免覆盖已有实验。
-
-每次训练输出：
-
-- `best.pt`：验证损失最低的模型，包含架构版本、完整配置和权重。
-- `model_config.yaml`：本次实际使用的完整配置。
-- `history.json`：各轮训练损失、验证指标及是否刷新最佳。
-- `metrics.json`：最佳轮次、指标、总步数、停止原因和设备。
-- `data_stats.json`：训练/验证行数、过滤数量和有效标签点数。
-
-在 Python 中加载：
+## 加载与统一推理
 
 ```python
-from m4_loop.checkpoint import load_checkpoint
+from forecast_backbones.m4_loop.predict import load_model
+from forecast_backbones.m4_loop.transformer_config import feature_columns
+from pipelines.pipeline_wrapper_inference import unified_inference
 
-model, metadata = load_checkpoint("runs/loop_2x2/best.pt", device="cpu")
-# batch_dict 的序列列为 [B,L] Tensor；load_checkpoint 已将模型设为 eval。
-output = model(batch_dict)
-power = output.predictions  # [B,192]，原功率单位
+model = load_model("runs/m4_loop/exp1/model_result", device="auto")
+ds = model.config["dataset"]
+result = unified_inference(
+    model,
+    "/data/future.parquet",
+    timestamp_cols=[ds["timestamp_col"]],
+    entity_cols=[ds["timestamp_col"], ds["entity_col"]],
+    feature_cols=feature_columns(model.config, supervised=False),
+)
 ```
 
-## Python API 与兼容入口
-
-推荐使用稳定的公共导入路径：
-
-```python
-from m4_loop import M4LoopModel, load_config
-from m4_loop.checkpoint import load_checkpoint
-
-config = load_config({"model": {"block_layers": 2, "loop_steps": 2}})
-model = M4LoopModel(config)
-```
-
-`from m4_loop.models import M4LoopModel` 同样可用。训练和预测的业务实现位于
-`m4_loop.training`、`m4_loop.inference`，命令解析位于 `m4_loop.cli`。
-统一入口 `python -m m4_loop train ...` 与 `m4-loop train ...` 等价，
-`predict` 子命令也相同。
-
-旧命令 `m4-loop-train`、`m4-loop-predict`、`python -m m4_loop.train`、
-`python -m m4_loop.predict` 继续保留，由薄包装调用同一套实现。
-旧 `m4_loop.model` 导入保留兼容转发。层实现改用 `m4_loop.models.layers`；
-未被训练框架使用的 `transformer_models.py` 别名入口已移除。新代码优先使用公共 API。
-
-## 人工数据验证
-
-下面的示例仅验证安装、训练、保存和重载链路，不用于判断真实预测精度：
+统一推理结果列名为 `TransformersAdaptedM4LoopModel`。也可以用模块内预测命令生成 `timestamp_win / station / observe_power_predict` 三列：
 
 ```bash
-python examples/make_demo_data.py --out demo_data
-m4-loop train \
-  --config configs/smoke.yaml \
-  --train demo_data/train.parquet \
-  --valid demo_data/valid.parquet \
-  --out runs/smoke \
-  --max-steps 2
-m4-loop predict \
-  --checkpoint runs/smoke/best.pt \
-  --data demo_data/test.parquet \
-  --out runs/smoke/predictions.parquet
-python -m pytest -q
+python -m forecast_backbones.m4_loop.predict \
+  --model-dir runs/m4_loop/exp1/model_result \
+  --data /data/future.parquet --out runs/m4_loop/exp1/predictions.parquet
 ```
 
-测试分为 `tests/unit/` 与 `tests/integration/`，主测试环境不通过修改 `sys.path` 或
-`PYTHONPATH` 注入工作区源码目录。独立性专项测试只允许加载临时复制的包。发布验证还需从构建后的 wheel 安装并在仓库外运行；
-详细结果见 [验证记录](validation.md)。
+两种入口均保持输入行序，预测是原功率量纲，不做非负或容量截断。注册器方式同样支持 `build_model("m4_loop", cfg)` 再严格加载 safetensors；评估通过 `build_evaluator("m4_loop")` 获取函数，返回标准 M4 评估列。
+
+## 人工数据检查
+
+本仓库 `examples/make_demo_data.py` 生成 16 点历史/8 点未来的人工数据，不代表真实精度。在本仓库运行生成脚本后，在 NextGen 中使用 `config/smoke.yaml` 和生成的数据，传 `--max-steps 2` 即可短训检查。生产数据继续使用默认窗口配置。

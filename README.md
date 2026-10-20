@@ -1,68 +1,60 @@
 # M4-Loop
 
-独立的光伏功率预测项目：用历史功率、历史/未来气象和外部功率预测构造联合 Patch Transformer，
-默认两个共享 block 循环两次。自带数据校验、训练、验证选优、权重保存和预测入口，
-不依赖原 M4 或 NextGenPVForecast。
+按 NextGen 中 M4 的接入方式组织的独立预测骨干。把 **`forecast_backbones/m4_loop/` 整个文件夹**复制到工作环境的 `NextGen/forecast_backbones/` 即可配置使用，无需安装本仓库为 Python 包。
 
-## 项目结构
+模型、循环 Transformer、归一化和损失函数都在这个文件夹内实现，**不导入、不调用 `forecast_backbones.m4` 或其他骨干**。沿用 NextGen 的公共 `interfaces.modeloutput`、`pipelines.transformer_dataset` 接口。
+
+## 要复制的结构
 
 ```text
-M4-Loop/
-├── pyproject.toml            # 安装、命令入口、测试和代码风格配置
-├── src/m4_loop/
-│   ├── models/               # 网络、基础层、损失、输出类型
-│   ├── data/                 # Parquet 窗口校验、Dataset、batch 整理
-│   ├── training/             # 训练循环、验证指标、最佳权重选点
-│   ├── inference/            # 批量预测及结果导出
-│   ├── cli/                  # 命令解析与调度
-│   ├── resources/            # 随安装包发布的默认 YAML
-│   ├── config.py             # 配置加载、合并和校验
-│   ├── checkpoint.py         # 版本化权重保存与严格加载
-│   └── runtime.py            # 设备、随机种子和 Tensor 转移
-├── configs/                  # 训练/消融/小样本配置覆盖项
-├── examples/                 # 人工数据生成示例
-├── tests/unit/               # 模型、损失和配置测试
-├── tests/integration/        # 训练、安装包、命令行和独立性测试
-└── docs/                     # 工程架构、详细用法和验证记录
+forecast_backbones/m4_loop/
+├── transformer_models.py       # TransformersAdaptedM4LoopModel：模型注册入口
+├── transformer_config.py       # 配置加载和字段校验
+├── transformer_trainer.py      # M4Loop_build_training_args、evaluate_model
+├── train.py                    # NextGen 环境内的训练入口
+├── predict.py                  # 标准权重加载、无标签预测入口
+├── layers/
+│   ├── loop_transformer.py     # 本地 RevIN、共享循环编码器、预测头
+│   └── losses.py               # 本地容量归一化损失
+└── config/
+    ├── configs.yaml            # 默认配置，672 点历史 → 192 点未来
+    ├── shared_1x4.yaml         # 1 个独立层 × 4 次循环
+    ├── untied_4.yaml           # 4 个独立层 × 1 次循环
+    └── smoke.yaml              # 人工数据小窗口检查
 ```
 
-## 安装
+其余 `tests/`、`docs/`、`examples/` 是本仓库的验证与说明，不必复制进骨干目录。
 
-Python ≥3.10，推荐 3.12。在仓库根目录执行：
+## 在工作环境使用
+
+先把上面的 `m4_loop` 文件夹放入 NextGen；以下命令都从 **NextGen 根目录**运行：
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install -e '.[dev]'
+python -m forecast_backbones.m4_loop.train \
+  --config forecast_backbones/m4_loop/config/configs.yaml \
+  --train /path/to/train.parquet \
+  --valid /path/to/valid.parquet \
+  --test /path/to/test.parquet \
+  --out runs/m4_loop/exp1
+
+python -m forecast_backbones.m4_loop.predict \
+  --model-dir runs/m4_loop/exp1/model_result \
+  --data /path/to/future.parquet \
+  --out runs/m4_loop/exp1/predictions.parquet
 ```
 
-项目采用 `src` 布局，先安装再运行。部署时可用 `python -m pip install .` 安装普通包。
+`--test` 可省略。训练使用 HF Trainer，结果保存为 `model_result/model.safetensors` 和 `model_result/model_config.yaml`。预测输入无需真实未来功率，也无需容量列。
 
-## 训练和预测
+NextGen 的模型注册器可直接使用 `build_model("m4_loop", config)`；评估入口可用 `build_evaluator("m4_loop")`。原 `train_shell/train_script.py` 采用硬编码分支，若要继续用它的 `--model_name m4_loop` 方式，需要应用 [可选接入补丁](integration/nextgen_train_script.patch)，详见 [使用说明](docs/usage.md)。仅复制目录时，请使用上面的模块训练命令。
 
-```bash
-m4-loop train --train /path/to/train.parquet --valid /path/to/valid.parquet --out runs/exp1
-m4-loop predict --checkpoint runs/exp1/best.pt --data /path/to/test.parquet --out runs/exp1/predictions.parquet
-```
+## 配置原则
 
-`python -m m4_loop train ...` / `predict ...` 与上述命令等价。
-默认输入 672 点历史、192 点未来预报，输出 192 点功率。输入字段与窗口必须准确匹配；
-真实数据请按 [数据契约与配置说明](docs/usage.md) 提供。
+保留 M4 的 `dataset / inference / model / optimization` 四段。默认 `model.e_layers: 2`、`model.loop_steps: 2`：2 个独立 Transformer 层重复执行 2 次，总计 4 次层计算。循环复用同一组参数，梯度穿过所有循环。
 
-软件版本 `0.2.0` 调整工程组织，模型计算与 v1 checkpoint 格式保持兼容。
-旧 `python -m m4_loop.train`、`python -m m4_loop.predict` 和两个旧 console 命令仍可使用。
+默认输入为两路气象历史/未来预报、历史功率、`chronos` 未来功率先验；标签为 `observe_power_future`，训练容量为 `cap_power_on`。列名和窗口长度均从配置读取。损失为容量归一化 MAE，可切换 MSE / Huber；它不包含旧 M4 的 NW 辅助损失。
 
-## 验证
+- [数据、配置、训练与推理细节](docs/usage.md)
+- [模块职责及 NextGen 接口](docs/architecture.md)
+- [验证方式和范围](docs/validation.md)
 
-```bash
-python -m pytest -q
-python -m ruff check src tests examples
-python -m ruff format --check src tests examples
-```
-
-测试使用安装后的包；主测试环境不通过 `PYTHONPATH` 或 `sys.path` 注入工作区源码。
-真实电站预测精度需要独立实验验证。
-
-- [工程架构与模块依赖](docs/architecture.md)
-- [模型、数据、配置、人工数据示例及 Python API](docs/usage.md)
-- [验证记录与适用范围](docs/validation.md)
+Python ≥3.10。第三方依赖列在 `requirements.txt`；工作环境已有依赖时无需重复安装。这里的“独立”指模型代码与原 M4 独立；运行依赖 NextGen 公共接口和第三方库。

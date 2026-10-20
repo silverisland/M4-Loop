@@ -1,0 +1,9 @@
+# Install only if missing from the existing NextGen environment.
+torch>=2.5,<3
+transformers>=4.40,<5
+accelerate>=0.28,<2
+safetensors>=0.4,<1
+numpy>=1.26,<3
+pandas>=2.2,<3
+pyarrow>=14
+PyYAML>=6,<7

@@ -5,8 +5,10 @@ import copy
 import pytest
 import torch
 
-from m4_loop.models import M4LoopModel
-from m4_loop.models.layers import RevIN
+from forecast_backbones.m4_loop.layers.loop_transformer import RevIN
+from forecast_backbones.m4_loop.transformer_models import (
+    TransformersAdaptedM4LoopModel as M4LoopModel,
+)
 
 
 def test_loops_reuse_parameters_and_execute_every_block(config):
@@ -209,7 +211,7 @@ def test_revin_statistics_survive_interleaved_windows():
 @pytest.mark.parametrize(
     "override",
     [
-        {"model": {"e_layers": 4}},
+        {"model": {"e_layers": 0}},
         {"model": {"pre_norm": True}},
         {"model": {"res_attention": True}},
         {"model": {"loop_steps": 0}},

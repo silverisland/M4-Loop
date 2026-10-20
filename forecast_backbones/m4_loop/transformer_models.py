@@ -1,4 +1,4 @@
-"""Standalone M4-Loop model and its explicit supervised-loss contract."""
+"""NextGen-compatible M4-Loop model, implemented entirely in this directory."""
 
 from __future__ import annotations
 
@@ -7,15 +7,15 @@ from pathlib import Path
 from typing import Any
 
 import torch
+from interfaces.modeloutput import TransformersAdaptedModelOutput
 from torch import Tensor, nn
 
-from ..config import load_config
-from .layers import FlattenPredictionHead, LoopedTransformerEncoder, RevIN
-from .losses import normalized_point_loss
-from .outputs import M4LoopOutput
+from .layers.loop_transformer import FlattenPredictionHead, LoopedTransformerEncoder, RevIN
+from .layers.losses import normalized_point_loss
+from .transformer_config import load_config
 
 
-class M4LoopModel(nn.Module):
+class TransformersAdaptedM4LoopModel(nn.Module):
     """Joint weather/power patch forecaster with a shared Transformer stack.
 
     Forward inputs are named raw columns, each shaped [batch,time]. Weather and
@@ -29,6 +29,7 @@ class M4LoopModel(nn.Module):
     ) -> None:
         super().__init__()
         self.config = load_config(config)
+        self.labels_name = [self.config["dataset"]["target_col"]]
         inference, model = self.config["inference"], self.config["model"]
         self.input_len = inference["input_len"]
         self.prediction_length = inference["pred_len"]
@@ -51,7 +52,7 @@ class M4LoopModel(nn.Module):
             d_model=model["d_model"],
             n_heads=model["n_heads"],
             d_ff=model["d_ff"],
-            block_layers=model["block_layers"],
+            block_layers=model["e_layers"],
             loop_steps=model["loop_steps"],
             dropout=model["dropout"],
             attn_dropout=model["attn_dropout"],
@@ -111,7 +112,7 @@ class M4LoopModel(nn.Module):
         self,
         batch_dict: Mapping[str, Any],
         labels: Mapping[str, Any] | Tensor | None = None,
-    ) -> M4LoopOutput:
+    ) -> TransformersAdaptedModelOutput:
         if not isinstance(batch_dict, Mapping):
             raise TypeError("batch_dict must map configured column names to tensors")
         x = self._prepare_input(batch_dict)
@@ -142,6 +143,6 @@ class M4LoopModel(nn.Module):
             if dataset["capacity_col"] not in batch_dict:
                 raise ValueError(f"Missing fixed capacity column: {dataset['capacity_col']}")
             loss = self.compute_loss(predictions, target, batch_dict[dataset["capacity_col"]])
-        return M4LoopOutput(
+        return TransformersAdaptedModelOutput(
             loss=loss, logits=predictions, predictions=predictions, embeddings=embeddings
         )
