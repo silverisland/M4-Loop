@@ -39,8 +39,13 @@ class PreNormTransformerBlock(nn.Module):
     """Standard x + Attention(LN(x)), followed by x + FFN(LN(x))."""
 
     def __init__(
-        self, d_model: int, n_heads: int, d_ff: int,
-        dropout: float = 0.1, attn_dropout: float = 0.0, activation: str = "relu",
+        self,
+        d_model: int,
+        n_heads: int,
+        d_ff: int,
+        dropout: float = 0.1,
+        attn_dropout: float = 0.0,
+        activation: str = "relu",
     ) -> None:
         super().__init__()
         if activation not in ("relu", "gelu"):
@@ -61,9 +66,7 @@ class PreNormTransformerBlock(nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:
         normalized = self.norm_attn(x)
-        attended, _ = self.self_attn(
-            normalized, normalized, normalized, need_weights=False
-        )
+        attended, _ = self.self_attn(normalized, normalized, normalized, need_weights=False)
         x = x + self.dropout_attn(attended)
         return x + self.dropout_ffn(self.ff(self.norm_ffn(x)))
 
@@ -77,20 +80,26 @@ class LoopedTransformerEncoder(nn.Module):
     """
 
     def __init__(
-        self, d_model: int, n_heads: int, d_ff: int,
-        block_layers: int = 2, loop_steps: int = 2,
-        dropout: float = 0.1, attn_dropout: float = 0.0, activation: str = "relu",
+        self,
+        d_model: int,
+        n_heads: int,
+        d_ff: int,
+        block_layers: int = 2,
+        loop_steps: int = 2,
+        dropout: float = 0.1,
+        attn_dropout: float = 0.0,
+        activation: str = "relu",
     ) -> None:
         super().__init__()
         if block_layers < 1 or loop_steps < 1:
             raise ValueError("block_layers and loop_steps must be positive")
         self.loop_steps = loop_steps
-        self.blocks = nn.ModuleList([
-            PreNormTransformerBlock(
-                d_model, n_heads, d_ff, dropout, attn_dropout, activation
-            )
-            for _ in range(block_layers)
-        ])
+        self.blocks = nn.ModuleList(
+            [
+                PreNormTransformerBlock(d_model, n_heads, d_ff, dropout, attn_dropout, activation)
+                for _ in range(block_layers)
+            ]
+        )
         self.final_norm = nn.LayerNorm(d_model)
 
     def forward(self, x: Tensor) -> Tensor:
@@ -104,8 +113,12 @@ class FlattenPredictionHead(nn.Module):
     """Flatten [B,C,D,N] and return prediction plus pre-normalization embedding."""
 
     def __init__(
-        self, nf: int, target_window: int, embedding_dim: int = 256,
-        head_hidden_dim: int = 64, head_dropout: float = 0.1,
+        self,
+        nf: int,
+        target_window: int,
+        embedding_dim: int = 256,
+        head_hidden_dim: int = 64,
+        head_dropout: float = 0.1,
     ) -> None:
         super().__init__()
         self.flatten = nn.Flatten(start_dim=1)

@@ -11,7 +11,7 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset
 
-from .config import feature_columns, load_config
+from ..config import feature_columns, load_config
 
 
 def read_frame(source: str | Path | pd.DataFrame) -> pd.DataFrame:
@@ -111,9 +111,7 @@ class WindowDataset(Dataset):
                 if column == self.capacity_col:
                     capacity = np.asarray(row[column])
                     if capacity.ndim != 0:
-                        raise ValueError(
-                            f"Row {position}, {column!r}: capacity must be a scalar."
-                        )
+                        raise ValueError(f"Row {position}, {column!r}: capacity must be a scalar.")
                     try:
                         capacity_number = np.float32(capacity)
                     except (TypeError, ValueError, OverflowError) as exc:
@@ -163,8 +161,7 @@ def collate_windows(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         raise ValueError("Cannot collate an empty batch.")
     columns = rows[0]["features"]
     features = {
-        column: torch.stack([row["features"][column] for row in rows])
-        for column in columns
+        column: torch.stack([row["features"][column] for row in rows]) for column in columns
     }
     label_presence = [row["labels"] is not None for row in rows]
     if any(label_presence) and not all(label_presence):

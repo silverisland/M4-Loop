@@ -12,9 +12,10 @@ from torch.utils.data import DataLoader
 
 from m4_loop.checkpoint import load_checkpoint, save_checkpoint
 from m4_loop.data import WindowDataset, collate_windows
-from m4_loop.model import M4LoopModel
-from m4_loop.predict import predict
-from m4_loop.train import evaluate, train
+from m4_loop.inference.predictor import predict
+from m4_loop.models import M4LoopModel
+from m4_loop.training.evaluation import evaluate
+from m4_loop.training.trainer import train
 
 
 def test_evaluation_aggregates_valid_points_independent_of_batch_size(config, frame):
@@ -48,7 +49,13 @@ def test_parquet_training_checkpoint_roundtrip_and_prediction(config, frame, tmp
     second, _ = load_checkpoint(checkpoint, device="cpu")
     assert metadata["epoch"] == result["best_epoch"]
     feature_batch = next(
-        iter(DataLoader(WindowDataset(frame, config, supervised=False), batch_size=5, collate_fn=collate_windows))
+        iter(
+            DataLoader(
+                WindowDataset(frame, config, supervised=False),
+                batch_size=5,
+                collate_fn=collate_windows,
+            )
+        )
     )
     first.eval()
     second.eval()
@@ -71,21 +78,23 @@ def test_parquet_training_checkpoint_roundtrip_and_prediction(config, frame, tmp
 
 
 def test_cli_train_then_predict_from_other_working_directory(config, frame, tmp_path):
-    """Exercise installed-style module imports and complete public CLI arguments."""
+    """Exercise the installed package and unified CLI from outside the repository."""
     import os
 
-    root = Path(__file__).resolve().parents[1]
     config_path = tmp_path / "config.yaml"
     config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
     parquet_path = tmp_path / "windows.parquet"
     frame.to_parquet(parquet_path, index=False)
     out_dir = tmp_path / "cli-training"
-    environment = dict(os.environ, PYTHONPATH=str(root), OMP_NUM_THREADS="1")
+    environment = dict(os.environ, OMP_NUM_THREADS="1")
+    environment.pop("PYTHONPATH", None)
     train_process = subprocess.run(
         [
             sys.executable,
+            "-I",
             "-m",
-            "m4_loop.train",
+            "m4_loop",
+            "train",
             "--config",
             str(config_path),
             "--train",
@@ -108,8 +117,10 @@ def test_cli_train_then_predict_from_other_working_directory(config, frame, tmp_
     predict_process = subprocess.run(
         [
             sys.executable,
+            "-I",
             "-m",
-            "m4_loop.predict",
+            "m4_loop",
+            "predict",
             "--checkpoint",
             str(out_dir / "best.pt"),
             "--data",
@@ -133,7 +144,7 @@ def test_early_stopping_preserves_best_weights(config, frame, tmp_path, monkeypa
     """The last epoch deliberately scores worse; its weights must not replace best."""
     import importlib
 
-    training = importlib.import_module("m4_loop.train")
+    training = importlib.import_module("m4_loop.training.trainer")
     snapshots = []
     losses = iter([0.1, 0.3])
 

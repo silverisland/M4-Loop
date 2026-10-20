@@ -8,10 +8,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+import m4_loop
+
 
 def test_copied_package_forward_backward_without_legacy_imports(config, tmp_path):
-    root = Path(__file__).resolve().parents[1]
-    shutil.copytree(root / "m4_loop", tmp_path / "m4_loop", ignore=shutil.ignore_patterns("__pycache__"))
+    source = Path(m4_loop.__file__).resolve().parent
+    shutil.copytree(source, tmp_path / "m4_loop", ignore=shutil.ignore_patterns("__pycache__"))
     isolated_script = r"""
 import importlib.abc
 import json
@@ -29,9 +31,9 @@ sys.meta_path.insert(0, RejectLegacyImports())
 sys.path.insert(0, str(Path.cwd()))
 import torch
 from m4_loop.config import load_config
-from m4_loop.model import M4LoopModel
-from m4_loop.train import train
-from m4_loop.predict import predict
+from m4_loop.models import M4LoopModel
+from m4_loop.training.trainer import train
+from m4_loop.inference.predictor import predict
 import pandas as pd
 
 torch.set_num_threads(1)
@@ -63,10 +65,12 @@ run = train(cfg, 'windows.parquet', 'windows.parquet', 'run', max_steps=1)
 predictions = predict(run['best_checkpoint'], 'windows.parquet', 'predictions.parquet', device='cpu')
 assert len(predictions) == 2
 assert Path('predictions.parquet').is_file()
-for module in tuple(sys.modules.values()):
+for name, module in tuple(sys.modules.items()):
     path = getattr(module, '__file__', None)
     if path:
         assert 'NextGenPVForecast' not in str(path), path
+        if name == 'm4_loop' or name.startswith('m4_loop.'):
+            assert Path(path).resolve().is_relative_to(Path.cwd().resolve()), path
 print('isolated forward and backward passed')
 """
     completed = subprocess.run(

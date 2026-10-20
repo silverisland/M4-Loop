@@ -1,6 +1,6 @@
 """Create tiny, artificial Parquet inputs to check installation and training.
 
-These samples are not a real forecast benchmark. They match examples/smoke.yaml,
+These samples are not a real forecast benchmark. They match configs/smoke.yaml,
 not the production default 672/192-point windows.
 """
 

@@ -5,12 +5,13 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping
 from copy import deepcopy
+from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-DEFAULT_CONFIG_PATH = Path(__file__).with_name("config") / "default.yaml"
+DEFAULT_CONFIG_PATH = files("m4_loop").joinpath("resources/default.yaml")
 _DEFAULT_CONFIG: dict[str, dict[str, Any]] = yaml.safe_load(
     DEFAULT_CONFIG_PATH.read_text(encoding="utf-8")
 )
@@ -56,10 +57,19 @@ def _validate(config: dict[str, Any]) -> None:
         if not isinstance(dataset[name], str) or not dataset[name].strip():
             raise ValueError(f"dataset.{name} must be a non-empty column name")
     columns = [
-        *dataset["conv_cols"], *dataset["conv_predict_cols"],
-        *(dataset[name] for name in (
-            "pv_col", "tsfm_col", "target_col", "capacity_col", "timestamp_col", "entity_col"
-        )),
+        *dataset["conv_cols"],
+        *dataset["conv_predict_cols"],
+        *(
+            dataset[name]
+            for name in (
+                "pv_col",
+                "tsfm_col",
+                "target_col",
+                "capacity_col",
+                "timestamp_col",
+                "entity_col",
+            )
+        ),
     ]
     if len(columns) != len(set(columns)):
         raise ValueError("dataset column names must be distinct")
@@ -68,8 +78,15 @@ def _validate(config: dict[str, Any]) -> None:
     if inference["seq_len"] != inference["input_len"] + inference["pred_len"]:
         raise ValueError("inference.seq_len must equal input_len + pred_len")
     for name in (
-        "block_layers", "loop_steps", "d_model", "n_heads", "d_ff",
-        "patch_len", "stride", "embedding_dim", "head_hidden_dim",
+        "block_layers",
+        "loop_steps",
+        "d_model",
+        "n_heads",
+        "d_ff",
+        "patch_len",
+        "stride",
+        "embedding_dim",
+        "head_hidden_dim",
     ):
         _integer(model[name], f"model.{name}")
     if model["d_model"] % model["n_heads"]:
@@ -79,7 +96,9 @@ def _validate(config: dict[str, Any]) -> None:
     if model["stride"] > model["patch_len"]:
         raise ValueError("model.stride must not exceed model.patch_len (no uncovered gaps)")
     if (inference["seq_len"] - model["patch_len"]) % model["stride"]:
-        raise ValueError("patch_len and stride must cover seq_len exactly without dropping its tail")
+        raise ValueError(
+            "patch_len and stride must cover seq_len exactly without dropping its tail"
+        )
     for name in ("dropout", "attn_dropout", "head_dropout"):
         _number(model[name], f"model.{name}", minimum=0.0)
         if model[name] >= 1:
@@ -95,7 +114,9 @@ def _validate(config: dict[str, Any]) -> None:
         _integer(optimization[name], f"optimization.{name}")
     for name in ("random_seed", "num_workers"):
         _integer(optimization[name], f"optimization.{name}", minimum=0)
-    _number(optimization["learning_rate"], "optimization.learning_rate", minimum=0.0, inclusive=False)
+    _number(
+        optimization["learning_rate"], "optimization.learning_rate", minimum=0.0, inclusive=False
+    )
     _number(optimization["weight_decay"], "optimization.weight_decay", minimum=0.0)
     _number(optimization["grad_clip"], "optimization.grad_clip", minimum=0.0, inclusive=False)
     if optimization["random_seed"] >= 2**32:
@@ -138,6 +159,9 @@ def feature_columns(config: str | Path | Mapping[str, Any] | None = None) -> lis
     """
     dataset = load_config(config)["dataset"]
     return [
-        *dataset["conv_cols"], *dataset["conv_predict_cols"],
-        dataset["pv_col"], dataset["tsfm_col"], dataset["capacity_col"],
+        *dataset["conv_cols"],
+        *dataset["conv_predict_cols"],
+        dataset["pv_col"],
+        dataset["tsfm_col"],
+        dataset["capacity_col"],
     ]

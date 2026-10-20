@@ -1,17 +1,16 @@
-"""Predict complete windows using a standalone M4-Loop checkpoint."""
+"""Batched forecast export without importing training or command-line code."""
 
 from __future__ import annotations
 
-import argparse
 from pathlib import Path
 
 import pandas as pd
 import torch
 from torch.utils.data import DataLoader
 
-from .checkpoint import load_checkpoint
-from .data import WindowDataset, collate_windows
-from .train import resolve_device
+from ..checkpoint import load_checkpoint
+from ..data import WindowDataset, collate_windows
+from ..runtime import resolve_device
 
 
 @torch.no_grad()
@@ -29,7 +28,9 @@ def predict(
     # clearly when unavailable.
     actual_device = resolve_device(device if device is not None else "auto")
     model.to(actual_device)
-    actual_batch_size = batch_size if batch_size is not None else config["optimization"]["eval_batch_size"]
+    actual_batch_size = (
+        batch_size if batch_size is not None else config["optimization"]["eval_batch_size"]
+    )
     if (
         isinstance(actual_batch_size, bool)
         or not isinstance(actual_batch_size, int)
@@ -46,9 +47,7 @@ def predict(
     )
     predictions: list[list[float]] = []
     for batch in loader:
-        features = {
-            key: value.to(actual_device) for key, value in batch["features"].items()
-        }
+        features = {key: value.to(actual_device) for key, value in batch["features"].items()}
         result = model(features)
         if not bool(torch.isfinite(result.predictions).all()):
             raise ValueError("Model produced non-finite predictions.")
@@ -68,19 +67,3 @@ def predict(
         destination.parent.mkdir(parents=True, exist_ok=True)
         output.to_parquet(destination, engine="pyarrow", index=False)
     return output
-
-
-def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--checkpoint", type=Path, required=True)
-    parser.add_argument("--data", type=Path, required=True)
-    parser.add_argument("--out", "--output", dest="out", type=Path, required=True)
-    parser.add_argument("--batch-size", type=int, default=None)
-    parser.add_argument("--device", default=None)
-    args = parser.parse_args(argv)
-    frame = predict(args.checkpoint, args.data, args.out, args.batch_size, args.device)
-    print(f"Saved {len(frame)} prediction rows to {args.out.resolve()}")
-
-
-if __name__ == "__main__":
-    main()

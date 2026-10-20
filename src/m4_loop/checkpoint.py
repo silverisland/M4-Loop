@@ -11,7 +11,7 @@ from typing import Any
 import torch
 
 from .config import load_config
-from .model import M4LoopModel
+from .models import M4LoopModel
 
 CHECKPOINT_FORMAT = "m4_loop"
 CHECKPOINT_VERSION = 1
@@ -36,9 +36,7 @@ def save_checkpoint(
         "format_version": CHECKPOINT_VERSION,
         "architecture_version": ARCHITECTURE_VERSION,
         "config": load_config(model.config),
-        "state_dict": {
-            key: value.detach().cpu() for key, value in model.state_dict().items()
-        },
+        "state_dict": {key: value.detach().cpu() for key, value in model.state_dict().items()},
         "epoch": int(epoch),
         "global_step": int(global_step),
         "metric": float(metric),
@@ -88,7 +86,9 @@ def load_checkpoint(
         )
     required = {"config", "state_dict", "epoch", "global_step", "metric"}
     if not required.issubset(payload):
-        raise ValueError(f"Incomplete checkpoint; missing keys: {sorted(required - payload.keys())}")
+        raise ValueError(
+            f"Incomplete checkpoint; missing keys: {sorted(required - payload.keys())}"
+        )
     if not isinstance(payload["config"], dict) or not isinstance(payload["state_dict"], dict):
         raise ValueError("Checkpoint config and state_dict must be dictionaries.")
     if (
@@ -98,10 +98,7 @@ def load_checkpoint(
         or payload["global_step"] < 0
     ):
         raise ValueError("Checkpoint epoch and global_step must be nonnegative integers.")
-    if (
-        not isinstance(payload["metric"], (int, float))
-        or not math.isfinite(payload["metric"])
-    ):
+    if not isinstance(payload["metric"], (int, float)) or not math.isfinite(payload["metric"]):
         raise ValueError("Checkpoint metric must be a finite number.")
     config = load_config(payload["config"])
     model = M4LoopModel(config)

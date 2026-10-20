@@ -3,29 +3,16 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import torch
 from torch import Tensor, nn
-from torch.nn import functional as F
 
-from .config import load_config
+from ..config import load_config
 from .layers import FlattenPredictionHead, LoopedTransformerEncoder, RevIN
-
-
-@dataclass
-class M4LoopOutput:
-    loss: Tensor | None
-    logits: Tensor
-    predictions: Tensor
-    embeddings: Tensor
-
-    def __getitem__(self, name: str) -> Tensor | None:
-        if name not in ("loss", "logits", "predictions", "embeddings"):
-            raise KeyError(name)
-        return getattr(self, name)
+from .losses import normalized_point_loss
+from .outputs import M4LoopOutput
 
 
 class M4LoopModel(nn.Module):
@@ -37,7 +24,8 @@ class M4LoopModel(nn.Module):
     """
 
     def __init__(
-        self, config: str | Path | Mapping[str, Any] | None = None,
+        self,
+        config: str | Path | Mapping[str, Any] | None = None,
     ) -> None:
         super().__init__()
         self.config = load_config(config)
@@ -60,9 +48,13 @@ class M4LoopModel(nn.Module):
         nn.init.uniform_(self.position_embedding, -0.02, 0.02)
         self.input_dropout = nn.Dropout(model["dropout"])
         self.encoder = LoopedTransformerEncoder(
-            d_model=model["d_model"], n_heads=model["n_heads"], d_ff=model["d_ff"],
-            block_layers=model["block_layers"], loop_steps=model["loop_steps"],
-            dropout=model["dropout"], attn_dropout=model["attn_dropout"],
+            d_model=model["d_model"],
+            n_heads=model["n_heads"],
+            d_ff=model["d_ff"],
+            block_layers=model["block_layers"],
+            loop_steps=model["loop_steps"],
+            dropout=model["dropout"],
+            attn_dropout=model["attn_dropout"],
             activation=model["activation"],
         )
         self.head = FlattenPredictionHead(
@@ -86,8 +78,7 @@ class M4LoopModel(nn.Module):
         value = self._tensor(batch[name], name)
         if value.ndim != 2 or value.shape[1] != length or value.shape[0] < 1:
             raise ValueError(
-                f"Input {name} must have shape [B,{length}] with B >= 1; "
-                f"got {tuple(value.shape)}"
+                f"Input {name} must have shape [B,{length}] with B >= 1; got {tuple(value.shape)}"
             )
         if not torch.isfinite(value).all():
             raise ValueError(f"Input {name} contains non-finite values")
@@ -106,70 +97,19 @@ class M4LoopModel(nn.Module):
         batch_sizes = {value.shape[0] for value in [*histories, *futures]}
         if len(batch_sizes) != 1:
             raise ValueError("All input columns must have the same batch size")
-        return torch.stack([
-            torch.cat([past, future], dim=-1)
-            for past, future in zip(histories, futures)
-        ], dim=1)
-
-    def _capacity(self, value: Any, batch_size: int, reference: Tensor) -> Tensor:
-        if value is None:
-            raise ValueError("A fixed positive capacity is required for supervised loss")
-        try:
-            capacity = torch.as_tensor(
-                value, dtype=reference.dtype, device=reference.device
-            )
-        except (TypeError, ValueError, RuntimeError) as exc:
-            raise ValueError("capacity must be numeric") from exc
-        if capacity.ndim == 0:
-            capacity = capacity.expand(batch_size).reshape(batch_size, 1)
-        elif capacity.ndim == 1 and capacity.shape[0] == batch_size:
-            capacity = capacity[:, None]
-        elif capacity.ndim == 2 and capacity.shape == (batch_size, 1):
-            pass
-        else:
-            raise ValueError(
-                "capacity must be a scalar, [B], or [B,1]; "
-                f"got {tuple(capacity.shape)} for B={batch_size}. "
-                "Time-varying capacities are unsupported."
-            )
-        if not torch.isfinite(capacity).all() or not (capacity > 0).all():
-            raise ValueError("capacity must contain only finite positive values")
-        return capacity
+        return torch.stack(
+            [torch.cat([past, future], dim=-1) for past, future in zip(histories, futures)], dim=1
+        )
 
     def compute_loss(self, pred: Tensor, target: Any, capacity: Any) -> Tensor:
-        """Mean normalized point loss over finite target values.
-
-        Error is (pred-target)/fixed_capacity. MAE uses |error|, MSE error²,
-        and Huber uses SmoothL1(error,0,beta=1). No auxiliary term is added.
-        Invalid labels are excluded before arithmetic; an empty mask is an error.
-        """
-        if not isinstance(pred, Tensor) or pred.ndim != 2:
-            raise ValueError("pred must be a Tensor with shape [B,H]")
-        if pred.shape[0] < 1 or pred.shape[1] != self.prediction_length:
-            raise ValueError(f"pred must have shape [B,{self.prediction_length}]")
-        try:
-            target = torch.as_tensor(target, dtype=pred.dtype, device=pred.device)
-        except (TypeError, ValueError, RuntimeError) as exc:
-            raise ValueError("target must contain numeric tensor values") from exc
-        if target.shape != pred.shape:
-            raise ValueError(
-                f"target shape {tuple(target.shape)} must equal pred shape {tuple(pred.shape)}"
-            )
-        if not torch.isfinite(pred).all():
-            raise ValueError("pred contains non-finite values")
-        capacities = self._capacity(capacity, pred.shape[0], pred)
-        valid = torch.isfinite(target)
-        if not valid.any():
-            raise ValueError("The batch has no finite target labels")
-        error = (pred[valid] - target[valid]) / capacities.expand_as(pred)[valid]
-        if self.loss_type == "mae":
-            return error.abs().mean()
-        if self.loss_type == "mse":
-            return error.square().mean()
-        return F.smooth_l1_loss(error, torch.zeros_like(error), beta=1.0)
+        """Apply the configured fixed-capacity loss to explicit targets."""
+        return normalized_point_loss(
+            pred, target, capacity, horizon=self.prediction_length, loss_type=self.loss_type
+        )
 
     def forward(
-        self, batch_dict: Mapping[str, Any],
+        self,
+        batch_dict: Mapping[str, Any],
         labels: Mapping[str, Any] | Tensor | None = None,
     ) -> M4LoopOutput:
         if not isinstance(batch_dict, Mapping):

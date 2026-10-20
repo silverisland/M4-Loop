@@ -5,8 +5,8 @@ import copy
 import pytest
 import torch
 
-from m4_loop.layers import RevIN
-from m4_loop.model import M4LoopModel
+from m4_loop.models import M4LoopModel
+from m4_loop.models.layers import RevIN
 
 
 def test_loops_reuse_parameters_and_execute_every_block(config):
@@ -26,8 +26,7 @@ def test_loops_reuse_parameters_and_execute_every_block(config):
         return hook
 
     hooks = [
-        block.register_forward_hook(count_call(index))
-        for index, block in enumerate(encoder.blocks)
+        block.register_forward_hook(count_call(index)) for index, block in enumerate(encoder.blocks)
     ]
     try:
         encoder(torch.randn(2, 5, config["model"]["d_model"]))
@@ -114,9 +113,7 @@ def test_forward_shapes_explicit_labels_and_finite_backward(config, batch):
 
 
 @pytest.mark.parametrize("capacity_shape", ["scalar", "batch", "batch_column"])
-def test_capacity_broadcast_is_per_station_even_when_batch_equals_horizon(
-    config, capacity_shape
-):
+def test_capacity_broadcast_is_per_station_even_when_batch_equals_horizon(config, capacity_shape):
     config["model"]["loss_type"] = "mae"
     model = M4LoopModel(config)
     # B == H exposes the common bug where [B] silently broadcasts along H.
@@ -159,7 +156,12 @@ def test_invalid_loss_inputs_fail_instead_of_silent_broadcast(config):
     model = M4LoopModel(config)
     prediction = torch.ones(2, 4)
     target = torch.zeros(2, 4)
-    for invalid_capacity in (None, torch.tensor(0.0), torch.tensor(-2.0), torch.tensor(float("nan"))):
+    for invalid_capacity in (
+        None,
+        torch.tensor(0.0),
+        torch.tensor(-2.0),
+        torch.tensor(float("nan")),
+    ):
         with pytest.raises((ValueError, TypeError)):
             model.compute_loss(prediction, target, invalid_capacity)
     with pytest.raises(ValueError):
