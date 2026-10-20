@@ -1,0 +1,5 @@
+# Same Pre-LN, loss and head as the default. Four independently parameterized
+# blocks, each executed once: the compute-matched control for the loop model.
+model:
+  block_layers: 4
+  loop_steps: 1

@@ -1,0 +1,4 @@
+# One block executed four times with shared parameters.
+model:
+  block_layers: 1
+  loop_steps: 4

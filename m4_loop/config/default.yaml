@@ -1,0 +1,45 @@
+# Defaults are loaded directly from this file; override only the keys you need.
+dataset:
+  conv_cols: [general_ghi, general_temp]
+  conv_predict_cols: [general_ghi_predict, general_temp_predict]
+  pv_col: observe_power
+  tsfm_col: chronos
+  target_col: observe_power_future
+  capacity_col: cap_power_on
+  timestamp_col: timestamp_win
+  entity_col: station
+
+inference:
+  input_len: 672
+  pred_len: 192
+  seq_len: 864
+
+model:
+  block_layers: 2
+  loop_steps: 2
+  d_model: 256
+  n_heads: 4
+  d_ff: 1024
+  patch_len: 96
+  stride: 96
+  dropout: 0.1
+  attn_dropout: 0.0
+  head_dropout: 0.1
+  activation: relu
+  embedding_dim: 256
+  head_hidden_dim: 64
+  revin: true
+  revin_eps: 0.00001
+  loss_type: mae
+
+optimization:
+  random_seed: 2025
+  train_epochs: 100
+  learning_rate: 0.0001
+  weight_decay: 0.0001
+  batch_size: 64
+  eval_batch_size: 64
+  patience: 10
+  num_workers: 0
+  device: auto
+  grad_clip: 1.0

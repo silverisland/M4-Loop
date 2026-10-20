@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "m4-loop"
+version = "0.1.0"
+description = "Independent looped patch Transformer for photovoltaic power forecasting"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.5,<3",
+    "numpy>=1.26,<3",
+    "pandas>=2.2,<3",
+    "pyarrow>=14",
+    "PyYAML>=6,<7",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10", "ruff>=0.9"]
+
+[project.scripts]
+m4-loop-train = "m4_loop.train:main"
+m4-loop-predict = "m4_loop.predict:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["m4_loop*"]
+
+[tool.setuptools.package-data]
+m4_loop = ["config/*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["m4_loop"]

@@ -1,0 +1,24 @@
+# Synthetic data only; use m4_loop/config/default.yaml for real window lengths.
+inference:
+  input_len: 16
+  pred_len: 8
+  seq_len: 24
+model:
+  patch_len: 4
+  stride: 4
+  d_model: 16
+  n_heads: 4
+  d_ff: 32
+  embedding_dim: 16
+  head_hidden_dim: 8
+  dropout: 0.0
+  attn_dropout: 0.0
+  head_dropout: 0.0
+optimization:
+  device: cpu
+  batch_size: 4
+  eval_batch_size: 4
+  train_epochs: 2
+  patience: 2
+  learning_rate: 0.001
+  num_workers: 0
